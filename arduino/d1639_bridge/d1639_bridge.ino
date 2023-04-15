@@ -1,15 +1,57 @@
+/**
+ * Arduino Leonardo as a USB CDC -to- Metra M1T380 MHB8748 protocol converter
+ * 
+ * Copyright (c) 2023 Roman Dobrodii
+ * 
+ * Licensed under MIT License. See LICENSE for more details.
+ * 
+ * --------------------------------------------------------------------------
+ * 
+ * Side A - USB-CDC port (implemented by Arduino's Serial class)
+ * Side B - custom 4-wire MHB8748 serial protocol 
+ * 
+ * 
+ * Arduino Leonardo pinout:
+ * 
+ *  io4 - DATA_I  (PD4 - ICP1)
+ *  io5 - RDY_I   (PC6)
+ *  io6 - DATA_O  (PD7)
+ *  io7 - RDY_O   (PE6)
+ *  io13 - LED
+ * 
+ * DATA_I, DATA_O, RDY_I, RDY_O are connected directly to K1 connector on
+ * the M1T380's D1639 board via a 30-50cm ribbon cable as follows.
+ *  >> pin numbering of K1 socket follows the usual DIP16 scheme
+ *  >> pins 1-8 are next to the PCB edge, pin 1 is the closest one to the
+ *  >> mounting screw in the very corner of the PCB.
+ * 
+ *  Pin 1 - DATA_I (input to Arduino, output from D1639)
+ *  Pin 2 - RDY_I  (input to Arduino, output from D1639)
+ *  Pin 6 - DATA_O (output from Arduino, input to D1639)
+ *  Pin 7 - RDY_O  (output from Arduino, input to D1639)
+ *  Pin 9 - GND    (connect to Arduino GND)
+ *  Pin 16 - +5 in (connect to Arduino +5V) 
+ * 
+ * 
+ * WARNING:
+ * As we use register-level programming to configure timer for Input
+ * Capture and to access GPIO quickly, this code is **NOT** runnable
+ * on other Arduino boards without modification!
+ * 
+ * It will work as-is **ONLY** on such Arduino Leonardo board:
+ * https://www.arduino.cc/en/uploads/Main/arduino-leonardo-schematic_3b.pdf
+ * 
+ * Running it on Arduino Uno, even after modyfing the code, is **NOT**
+ * recommended as it has no serial port flow control (which is available on
+ * Leonardo thanks to USB-CDC), and MHB8748 really needs flow control as in
+ * many cases it is not ready to receive data. No flow control on PC side
+ * means very high chance of data loss with this code!
+ * 
+ * IOW, if you want to run this, consider using a Leonardo board. Seriously.
+ */
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
-
-/*
- * Pinout:
- * 
- * DATA_I - io4 - PD4 (ICP1)
- * RDY_I  - io5 - PC6
- * DATA_O - io6 - PD7
- * RDY_O  - io7 - PE6
- * io13 - LED
- */
 
 #define P_BIT_DATA_I    (4u)
 #define P_BIT_RDY_I     (6u)
@@ -32,7 +74,7 @@
 const uint8_t pin_led = 13;
 
 /**
- * Timing constraints
+ * Timing constants
  */
 #define T_BIT_US        (100u)
 #define T_1BIT_US       (150u)
