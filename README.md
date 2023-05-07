@@ -1,16 +1,32 @@
-# Metra M1T380 ADCON
+# Metra M1T380 Tools
 
-**ADCON** is a Python tool for communicating with the ADC board of Metra M1T380
-multimeter from your PC.
+This repository contains tools that I've developed when working and
+reverse-engineering Metra M1T380 multimeter. If you have such a device and
+you're thinking of hacking it, some of these may turn out to be useful.
 
-It uses PySerial to talk to the Arduino board connected over USB. The Arduino
-acts as an interface converter between Serial Port interface on the USB side and
-M1T380-specific serial protocol on another side. It connects to the K1 connector
-on D1639 ADC board - the one to which multimeter's own Intel 8080 CPU board is
-normally connected.
+## ADCON
 
-This allows you to exercise full control over low-level functions implemented by
-MHB8748 MCU:
-- Control measurement & calibration modes via 'set_mode' command.
-- Run ADC measurements via 'run_meas' command.
-- Run built-in test & repair programs via 'run_test' command.
+[adcon](adcon/)
+
+ADCON is a tool that talks to D1639/D1791 ADC board via a simple Arduino
+Leonardo adapter. No extra hardware is needed except for Arduino, some wires and
+connectors. It allows you to excersise low-level control over ADC, collect data
+(e.g. when you want to analyze stability of ADC measurements over time or
+temperature), and execute built-in factory tests which can be helpful during ADC
+board repair.
+
+## CPUEMU
+
+[cpuemu](cpuemu/)
+
+CPUEMU is a system-level M1T380 emulator that runs factory i8080 EPROM images,
+and simulates minimal set of 8080 peripherals to make it useful. I wrote it to
+analyze (trace) different aspects of factory 8080 FW, specifically to
+reverse-engineer the layout of CALRAM memory.
+
+Writing an emulator and tracing the execution is surely easier than fully
+reverse-engineering 8 KiB of hand-written 8080 assembly!
+
+# License
+
+See [LICENSE](LICENSE)
