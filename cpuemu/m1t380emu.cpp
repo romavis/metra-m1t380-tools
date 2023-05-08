@@ -42,7 +42,14 @@ struct M1T380 {
   static constexpr size_t INT_PERIOD = 4096;  // cycles
   static constexpr double CYC_PER_SEC = 2048000;
 
-  static uint32_t sec2cyc(double sec) { return (uint32_t)(sec * CYC_PER_SEC); }
+  static int32_t sec2cyc(double sec) {
+    sec *= CYC_PER_SEC;
+    int32_t x = (int32_t)sec;
+    if (abs((double)x - sec) > 1)
+      throw domain_error(fmt::format(
+          "ill-formed time value '{} sec', perhaps it is too large"));
+    return x;
+  }
 
   /**
    * @brief Class that implements wallclock time scale and allows scheduling
@@ -60,6 +67,11 @@ struct M1T380 {
 
     void schedule(int32_t after_cyc, std::function<CallbackFunction> cb) {
       assert(after_cyc >= 0);
+      if (after_cyc < 0)
+        throw runtime_error(
+            fmt::format("can not schedule work in the past (asked to schedule "
+                        "in {} cycles)",
+                        after_cyc));
       auto work = WorkItem{*this, cyc() + after_cyc, cb};
       SPDLOG_DEBUG("{}: scheduling work at {} cyc", cyc(), work.when_cyc);
       work_queue_.push(work);
@@ -100,7 +112,7 @@ struct M1T380 {
    */
   class Display {
    public:
-    static constexpr unsigned NUM_CELLS = 10;
+    static constexpr unsigned NUM_COLUMNS = 10;
     static constexpr unsigned NUM_STATUS_LEDS = 20;
     static constexpr unsigned NUM_7SEG_SYMS = 8;
 
@@ -108,8 +120,8 @@ struct M1T380 {
 
     void set_seg(fast_u8 v) { seg_ = v; }
 
-    void set_addr(fast_u8 v) {
-      addr_ = v;
+    void set_col(fast_u8 v) {
+      col_ = v;
       // Since this is a dynamically-scanned display, we need to periodically
       // sample the address & segment buses, and update recorded value of
       // selected cell. We do this 500us after address bus has been updated by
@@ -165,12 +177,12 @@ struct M1T380 {
     }
 
    private:
-    void sample() { contents_[addr_ % NUM_CELLS] = seg_; }
+    void sample() { contents_[col_ % NUM_COLUMNS] = seg_; }
 
     M1T380& sys_;
     fast_u8 seg_;
-    fast_u8 addr_;
-    array<fast_u8, NUM_CELLS> contents_;
+    fast_u8 col_;
+    array<fast_u8, NUM_COLUMNS> contents_;
 
     /**
      * @brief Status LED map
@@ -187,6 +199,75 @@ struct M1T380 {
         {1, 0, "*mA*"},   {1, 1, "*Ohm*"}, {1, 2, "*mV*"},     {1, 3, "*CAL*"},
         {1, 4, "*kOhm*"}, {1, 5, "*V*"},   {1, 6, "*REMOTE*"}, {1, 7, "REP"},
         {2, 0, "FILTER"}, {2, 3, "FAST"},  {2, 4, "HI.RES"},   {2, 5, "AUTO"},
+    }};
+  };
+
+  class Keys {
+   public:
+    static constexpr unsigned NUM_KEYS = 17;
+
+    Keys(M1T380& sys) : sys_(sys) {}
+
+    void set_col(fast_u8 v) {
+      // Find keys mapped to this column
+      selkeys_.fill(nullptr);
+      for (Key& key : keys_) {
+        if (key.col == v) {
+          assert(key.row == 0 || key.row == 1);
+          selkeys_[key.row] = &key;
+        }
+      }
+    }
+
+    fast_u8 get_rows() const {
+      fast_u8 x = 0;
+      if (selkeys_[0] && selkeys_[0]->pressed) x |= 1;
+      if (selkeys_[1] && selkeys_[1]->pressed) x |= 2;
+      // active LOW
+      x = ~x;
+      return x;
+    }
+
+    void set_key_state(const string& key_name, bool pressed) {
+      for (Key& k : keys_) {
+        if (k.name == key_name) {
+          k.pressed = pressed;
+          return;
+        }
+      }
+      // Not found
+      throw runtime_error(fmt::format("Unknown key: '{}'", key_name));
+    }
+
+   private:
+    struct Key {
+      unsigned col;
+      unsigned row;
+      string name;
+      bool pressed{};
+    };
+
+    M1T380& sys_;
+    array<Key*, 2> selkeys_{};
+
+    array<Key, NUM_KEYS> keys_{{
+        {0, 1, "VOLTS"},
+        {0, 0, "AMPS"},
+        {1, 1, "OHMS"},
+        {1, 0, "AC"},
+        {2, 1, "CAL"},
+        {2, 0, "FILTER"},
+        {3, 1, "FAST"},
+        {3, 0, "HIRES"},
+        {4, 1, "SAMPLE"},
+        {4, 0, "REP"},
+        {5, 1, "PROG"},
+        {5, 0, "AUTO"},
+        {6, 1, "UP"},
+        {6, 0, "DOWN"},
+        {7, 1, "ZERO"},
+        {7, 0, "LOCAL"},
+        {8, 1, "COMP"},
     }};
   };
 
@@ -509,9 +590,10 @@ struct M1T380 {
     fast_u8 input_port(int port, fast_u8 mask) override {
       fast_u8 n = 0;
       if (port == 2) {
+        n = 0xF0;
         n |= (sys_.adc_.get_data1() & 1) << 2;
         n |= (sys_.adc_.get_rdy1() & 1) << 3;
-        n |= 0xF3;  // Keyboard - TBD
+        n |= sys_.keys_.get_rows() & 0x3;
       } else {
         n = 0xFF;  // doesnt matter anyway as those are output ports
       }
@@ -525,7 +607,8 @@ struct M1T380 {
       if (port == 0) {
         sys_.display_.set_seg(data);
       } else if (port == 1) {
-        sys_.display_.set_addr(data & 0xF);
+        sys_.keys_.set_col(data & 0xF);
+        sys_.display_.set_col(data & 0xF);
         bool data2 = (~(data >> 4)) & 1;
         bool rdy2 = (~(data >> 5)) & 1;
         sys_.adc_.set_data2(data2);
@@ -686,7 +769,8 @@ struct M1T380 {
     M1T380& sys_;
   };
 
-  M1T380() : cpu_(*this), pio_(*this), display_(*this), adc_(*this) {
+  M1T380()
+      : cpu_(*this), pio_(*this), display_(*this), keys_(*this), adc_(*this) {
     // Kickoff periodic interrupts
     irq_trigger();
   }
@@ -722,6 +806,8 @@ struct M1T380 {
   PIO pio_;
   // Display
   Display display_;
+  // Keys
+  Keys keys_;
   // ADC
   ADC adc_;
 
@@ -898,13 +984,17 @@ int main(int argc, char** argv) {
   });
 
   // Configure periodic display readouts
-  uint32_t disp_print_interval = sys.sec2cyc(parser.get<double>("--disp"));
-  std::function<void()> disp_print = [&]() {
+  auto disp_print_interval = sys.sec2cyc(parser.get<double>("--disp"));
+  // NOTE: keep below `disp_print` variable alive! Demons will eat your computer
+  // if it is RAII-cleaned up while lambda is still being scheduled.
+  std::function<void()> disp_print = [&sys, &disp_print,
+                                      disp_print_interval]() {
     SPDLOG_DEBUG("periodic display printout");
     sys.clock_.schedule(disp_print_interval, disp_print);
     sys.display_.print();
   };
-  sys.clock_.schedule(disp_print_interval, disp_print);
+  if (disp_print_interval > 0)
+    sys.clock_.schedule(disp_print_interval, disp_print);
 
   // Configure scripted actions
   for (const string& action : parser.get<vector<string>>("--action")) {
@@ -914,7 +1004,7 @@ int main(int argc, char** argv) {
     sregex_token_iterator end;
     deque<string> toks(iter, end);
 
-    auto pop_tok = [&]() -> auto {
+    auto pop_tok = [&]() -> string {
       if (!toks.size()) throw runtime_error("Not enough arguments");
       auto r = toks.front();
       toks.pop_front();
@@ -937,6 +1027,19 @@ int main(int argc, char** argv) {
         sys.clock_.schedule(cyc, [&sys]() {
           SPDLOG_INFO("scripted display printout");
           sys.display_.print();
+        });
+      } else if (cmd == "click") {
+        // Key down, wait 0.2 sec, key up
+        const double delay = 0.2;
+        string key_name = pop_tok();
+
+        sys.clock_.schedule(cyc, [&sys, key_name]() {
+          SPDLOG_INFO("key '{}' down", key_name);
+          sys.keys_.set_key_state(key_name, true);
+        });
+        sys.clock_.schedule(sys.sec2cyc(time + delay), [&sys, key_name]() {
+          SPDLOG_INFO("key '{}' up", key_name);
+          sys.keys_.set_key_state(key_name, false);
         });
       } else {
         throw runtime_error(fmt::format("Unknown command '{}'", cmd));
