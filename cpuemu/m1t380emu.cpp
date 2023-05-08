@@ -22,6 +22,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <queue>
 #include <regex>
 #include <sstream>
@@ -358,26 +359,6 @@ struct M1T380 {
 
       double adc_in_v;
       switch (mode_) {
-        case 0:
-          // VDC 150mv
-          adc_in_v = -vx * 100 / 2;
-          break;
-        case 1:
-          // VDC 1.5v
-          adc_in_v = -vx * 10 / 2;
-          break;
-        case 2:
-          // VDC 15V
-          adc_in_v = -vx * 1 / 2;
-          break;
-        case 3:
-          // VDC 150V
-          adc_in_v = -vx * 10 / 100 / 2;
-          break;
-        case 4:
-          // VDC 1500V
-          adc_in_v = -vx * 1 / 100 / 2;
-          break;
         case 20:
           // AC/DC 0
           adc_in_v = 0;
@@ -414,13 +395,17 @@ struct M1T380 {
           adc_in_v = -sim_vcal_;
           break;
         default:
-          adc_in_v = 0;
+          if (adc_k_.count(mode_)) {
+            adc_in_v = sim_in_ * adc_k_.at(mode_);
+          } else {
+            adc_in_v = 0;
+          }
           break;
       }
       // add some ADC zero offset
       adc_in_v += sim_voff_;
-      // ADC input is clipped to ~ -10..+10V
-      adc_in_v = min(max(adc_in_v, -10.), 10.);
+      // ADC input is clipped to ~ -9.5..+9.5V
+      adc_in_v = min(max(adc_in_v, -9.5), 9.5);
       // calculate scaled ADC result (0x40000000 corresponds to full-scale
       // range)
       double x = adc_in_v / sim_vref_ * r25 / r36 * 0x40000000LL;
@@ -430,8 +415,20 @@ struct M1T380 {
     }
 
     double sim_in_ = 5;
+
+    /**
+     * @note Voff and Vref are compensated out by calibration procedure
+     */
     double sim_voff_ = 0;
     double sim_vref_ = 7.4;
+
+    /**
+     * @note In real life, Vcal should be rock stable, and its actual value
+     * is taken into account when calculating CALRAM coefficients.
+     * 
+     * So you change Vcal - you also need to update CALRAM, otherwise measured
+     * values will be (totally) off.
+     */
     double sim_vcal_ = 8.4;
 
    private:
@@ -483,6 +480,39 @@ struct M1T380 {
     bool rdy1_ = true;
     int mode_ = 3;  // VDC 150V
     M1T380& sys_;
+
+    /**
+     * @brief Scaling factors for input circuitry
+     *
+     * Basically, for all modes except for calibration ones, ADC input voltage
+     * is:
+     *  V(ADC) = IN * K, where IN is the input value on H-L posts of the
+     * multimeter (can be current, can be volts, can be ohms - formula is the
+     * same)
+     *
+     * This dictionary specifies 'mode: K' mapping
+     * 
+     * @note In real life, K depends on the hardware component tolerance,
+     * and will be different for each multimeter. That's why CALRAM is needed.
+     */
+    const map<int, double> adc_k_{{
+        // IN is in Volts
+        {0, -100. / 2},
+        {1, -10. / 2},
+        {2, -1. / 2},
+        {3, -10. / 100 / 2},
+        {4, -1. / 100 / 2},
+        // IN is in Amps
+        {5, -100. * 10 / 2},   // Rs=10
+        {6, -100. * 0.1 / 2},  // Rs=0.1
+        // IN is in Ohms
+        {7, -5e-3 * -10.},
+        {8, -0.5e-3 * -10.},
+        {9, -0.5e-3 * -1.},
+        {10, -50e-6 * -1.},
+        {11, -5e-6 * -1.},
+        {12, -0.5e-6 * -1.},
+    }};
   };
 
   /**
@@ -1020,7 +1050,7 @@ int main(int argc, char** argv) {
       } else if (cmd == "input") {
         auto vx = stod(pop_tok());
         sys.clock_.schedule(cyc, [&sys, vx]() {
-          SPDLOG_INFO("setting input voltage to {}", vx);
+          SPDLOG_INFO("setting measured value to {:f}", vx);
           sys.adc_.sim_in_ = vx;
         });
       } else if (cmd == "disp") {

@@ -31,43 +31,72 @@ def main():
     #       sign = (MS==1) ? -1 : +1
     #
     # Each coefficient corresponds to its own mode:
-    #   Cn corresponds to mode=n
+    #   Cn is for mode `n` (C0 is for mode 0 - VDC 150mV, etc.)
     # Cn is used as a scaling factor to convert ADC measurement into
     # displayed value:
-    #   D = Cn * (ADC(Vx) / ADC(Vcal)) 
-    # The system then places decimal point & sets units LEDs according
-    # to the type of measurement performed. Units in which D should be
-    # presented are determined according to range setting, e.g.:
+    #   D = Cn * (ADC(Vadc) / ADC(Vcal))
+    #       where Vadc is the voltage on ADC input (chip I6 @ D1639)
+    # For each mode and range, D is represented in different units:
     #   VDC 150mv   - 1uV
     #   VDC 1.5V    - 10uV
     #   VDC 15V     - 100uV
     #   VDC 150V    - 1mV
-    #   etc.
+    #   IDC 1.5A    - 10uA
+    #   ...
     #
     # Then:
-    #   Cn = D / ADC(Vx) * ADC(Vcal)
-    #   Cn = D / (Vx * k) * Vcal
-    #   Cn = Vcal * (D / Vx) / k
+    #   Cn = D * ADV(Vcal) / ADC(Vadc)
+    #   Cn = D * Vcal / (X * k)
+    #   Cn = Vcal / (k * (X / D))
     # Where:
-    #   D / Vx - establishes relation between D and Vx (sets D units)
-    #   k - specifies gain from H-L input posts to ADC input 
+    #   X - measured value (voltage, current, ohms, etc.)
+    #   k - gain of input circuitry that converts X into Vadc:
+    #       Vadc = X * k
+    #   X / D - unit in which D is represented (1e-6 is 1uV/uA,
+    #           1e-3 is 1mV/mA etc.) 
     
+    # NOTE: in real life, Vcal is determined by reference voltage source
+    # and will be different for each multimeter. That's why CALRAM is needed.
     vcal = 8.4
 
-    mode_d_over_vx = {
-        0: 1e6,
-        1: 1e5,
-        2: 1e4,
-        3: 1e3,
-        4: 1e2
+    mode_display_unit = {
+        # VOLTS DC
+        0: 1e-6,
+        1: 1e-5,
+        2: 1e-4,
+        3: 1e-3,
+        4: 1e-2,
+        # AMPS DC
+        5: 1e-7,
+        6: 1e-5,
+        # OHMS
+        7: 1e-3,
+        8: 1e-2,
+        9: 1e-1,
+        10: 1,
+        11: 10,
+        12: 100,
     }
 
-    mode_adc_k = {
+    # NOTE: in real life, K depends on the hardware component tolerance,
+    # and will be different for each multimeter. That's why CALRAM is needed.
+    mode_k = {
+        # VOLTS DC
         0: -100 / 2,
         1: -10 / 2,
         2: -1 / 2,
         3: -10 / 100 / 2,
-        4: -1 / 100 / 2
+        4: -1 / 100 / 2,
+        # AMPS DC
+        5: -100. * 10 / 2,
+        6: -100. * 0.1 / 2,
+        # OHMS
+        7: -5e-3 * -10.,
+        8: -0.5e-3 * -10.,
+        9: -0.5e-3 * -1.,
+        10: -50e-6 * -1.,
+        11: -5e-6 * -1.,
+        12: -0.5e-6 * -1.,
     }
 
     def to_mf32(c: float) -> int:
@@ -99,9 +128,9 @@ def main():
     print('MODE:             C,         Cn,     check(Cn)')
     cns = []
     for mode in range(20):
-        dovx = mode_d_over_vx.get(mode, 1)
-        k = mode_adc_k.get(mode, 1)
-        c = dovx / k * vcal
+        unit = mode_display_unit.get(mode, 1)
+        k = mode_k.get(mode, 1)
+        c = vcal / (k * unit)
         cn = to_mf32(c)
         print(f'{mode:4d}: {c:10.7e}, 0x{cn:08x}, {from_mf32(cn):10.7e}')
         cns.append(cn)
