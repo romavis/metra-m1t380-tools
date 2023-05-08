@@ -13,6 +13,7 @@
 #define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_DEBUG
 
 #include <fmt/core.h>
+#include <spdlog/pattern_formatter.h>
 #include <spdlog/spdlog.h>
 
 #include <array>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <iostream>
 #include <queue>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -229,8 +231,7 @@ struct M1T380 {
         // set_mode
         int mode = cmd & 0x1F;
         bool fil = cmd & 0x20;
-        SPDLOG_INFO("{:010d}: ADC set_mode mode={} fil={}", sys_.cyc(), mode,
-                    fil);
+        SPDLOG_INFO("ADC set_mode mode={} fil={}", mode, fil);
         mode_ = mode;
       } else if (!(cmd & 0x78)) {
         // run_meas
@@ -247,9 +248,9 @@ struct M1T380 {
         if (dur == 100) meas_tsn >>= 3;
 
         SPDLOG_INFO(
-            "{:010d}: ADC run_meas dur={} mode={} - meas {:08x}, send "
+            "ADC run_meas dur={} mode={} - meas {:08x}, send "
             "TSx={:04x}, TSn={:06x}",
-            sys_.cyc(), dur, mode_, adc_meas, meas_tsx, meas_tsn);
+            dur, mode_, adc_meas, meas_tsx, meas_tsn);
 
         sys_.clock_.schedule(sec2cyc(dur * 25e-3), [=]() {
           rx_queue_.clear();
@@ -263,9 +264,8 @@ struct M1T380 {
       } else {
         // run_test
         int test = (cmd >> 3) & 0xF;
-        SPDLOG_WARN(
-            "{:010d}: ADC run_test test={} - NOT IMPLEMENTED (do nothing)",
-            sys_.cyc(), test);
+        SPDLOG_WARN("ADC run_test test={} - NOT IMPLEMENTED (do nothing)",
+                    test);
       }
     }
 
@@ -362,7 +362,7 @@ struct M1T380 {
         sys_.clock_.schedule(sec2cyc(100e-6), [=]() { tx_read_bit(); });
       } else {
         tx_state_ = 0;
-        SPDLOG_DEBUG("{:010d}: ADC TX 0x{:02x}", sys_.cyc(), tx_byte_);
+        SPDLOG_DEBUG("ADC TX 0x{:02x}", tx_byte_);
         exec_cmd(tx_byte_);
       }
     }
@@ -384,7 +384,7 @@ struct M1T380 {
         sys_.clock_.schedule(sec2cyc(100e-6), [=]() { rx_push_bit(); });
       } else {
         (void)rx_byte_s_;
-        SPDLOG_DEBUG("{:010d}: ADC RX 0x{:02x} - done", sys_.cyc(), rx_byte_s_);
+        SPDLOG_DEBUG("ADC RX 0x{:02x} - done", rx_byte_s_);
         rx_state_ = 0;
         start_rx();
       }
@@ -516,14 +516,12 @@ struct M1T380 {
         n = 0xFF;  // doesnt matter anyway as those are output ports
       }
 
-      SPDLOG_DEBUG("{:010d} {:04x}: PIO IN port {} : {:08b}", sys_.cyc(),
-                   sys_.pc(), (int)port, n);
+      SPDLOG_DEBUG("PIO IN port {} : {:08b}", (int)port, n);
       return n;
     }
 
     void output_port(int port, fast_u8 mask, fast_u8 data) override {
-      SPDLOG_DEBUG("{:010d} {:04x}: PIO OUT port {} : {:08b}", sys_.cyc(),
-                   sys_.pc(), (int)port, data);
+      SPDLOG_DEBUG("PIO OUT port {} : {:08b}", (int)port, data);
       if (port == 0) {
         sys_.display_.set_seg(data);
       } else if (port == 1) {
@@ -559,8 +557,7 @@ struct M1T380 {
           break;
         case CS::CALRAM:
           ret = 0xF0 | (sys_.calram_[addr & (CALRAM_SIZE - 1)] & 0x0F);
-          SPDLOG_INFO("{:010d} {:04x}: MEMR CALRAM {:02x}: {:02x}", sys_.cyc(),
-                      sys_.pc(), addr, ret);
+          SPDLOG_INFO("MEMR CALRAM {:02x}: {:02x}", addr, ret);
           break;
         case CS::PIO:
           ret = sys_.pio_.read(addr & 3);
@@ -569,40 +566,33 @@ struct M1T380 {
           ret = 0xFF;
           break;
         default:
-          SPDLOG_WARN("{:010d} {:04x}: MEMR to unmapped address 0x{:04x}",
-                      sys_.cyc(), sys_.pc(), addr);
+          SPDLOG_WARN("MEMR to unmapped address 0x{:04x}", addr);
           break;
       }
-      SPDLOG_TRACE("{:010d} {:04x}: MEMR 0x{:04x}:0x{:02x}", sys_.cyc(),
-                   sys_.pc(), addr, ret);
+      SPDLOG_TRACE("MEMR 0x{:04x}:0x{:02x}", addr, ret);
       return ret;
     }
 
     void on_write(fast_u16 addr, fast_u8 n) {
-      SPDLOG_TRACE("{:010d} {:04x}: MEMW 0x{:04x}:0x{:02x}", sys_.cyc(),
-                   sys_.pc(), addr, n);
+      SPDLOG_TRACE("MEMW 0x{:04x}:0x{:02x}", addr, n);
       base::on_write(addr, n);
       auto cs = decode_cs(addr);
       switch (cs) {
         case CS::ROM:
-          SPDLOG_WARN("{:010d} {:04x}: MEMW to ROM 0x{:04x}: 0x{:02x}",
-                      sys_.cyc(), sys_.pc(), addr, n);
+          SPDLOG_WARN("MEMW to ROM 0x{:04x}: 0x{:02x}", addr, n);
           break;
         case CS::RAM:
           sys_.ram_[addr & (RAM_SIZE - 1)] = n;
           break;
         case CS::CALRAM:
-          SPDLOG_INFO("{:010d} {:04x}: MEMW CALRAM {:02x} : {:02x}", sys_.cyc(),
-                      sys_.pc(), addr, n);
+          SPDLOG_INFO("MEMW CALRAM {:02x} : {:02x}", addr, n);
           sys_.calram_[addr & (CALRAM_SIZE - 1)] = n & 0x0F;
           break;
         case CS::PIO:
           sys_.pio_.write(addr & 3, n);
           break;
         default:
-          SPDLOG_WARN(
-              "{:010d} {:04x}: MEMW to unmapped address 0x{:04x}: 0x{:02x}",
-              sys_.cyc(), sys_.pc(), addr, n);
+          SPDLOG_WARN("MEMW to unmapped address 0x{:04x}: 0x{:02x}", addr, n);
           break;
       }
     }
@@ -610,21 +600,19 @@ struct M1T380 {
     fast_u8 on_input(fast_u16 port) {
       base::on_input(port);
       fast_u8 n = 0xFF;
-      SPDLOG_DEBUG("{:010d} {:04x}: IOR {:04x}:{:02x}", sys_.cyc(), sys_.pc(),
-                   port, n);
+      SPDLOG_DEBUG("IOR {:04x}:{:02x}", port, n);
       return n;
     }
 
     void on_output(fast_u16 port, fast_u8 n) {
-      SPDLOG_DEBUG("{:010d} {:04x}: IOW {:04x}:{:02x}", sys_.cyc(), sys_.pc(),
-                   port, n);
+      SPDLOG_DEBUG("IOW {:04x}:{:02x}", port, n);
       base::on_output(port, n);
       // In M1T380, IOW to any port simply resets IRQ pin
       sys_.irq_ = false;
     }
 
     void on_tick(unsigned t) {
-      SPDLOG_TRACE("{:010d} {:04x}: T {}", sys_.cyc(), sys_.pc(), t);
+      SPDLOG_TRACE("T {}", t);
       base::on_tick(t);
       // drive clock
       sys_.clock_.advance(t);
@@ -704,16 +692,6 @@ struct M1T380 {
   }
 
   /**
-   * @brief Shortcut to get PC value
-   */
-  fast_u16 pc() { return cpu_.on_get_pc(); }
-
-  /**
-   * @brief Shortcut to get cycle counter
-   */
-  fast_u32 cyc() { return clock_.cyc(); }
-
-  /**
    * @brief Main function that steps CPU and whole system by one "step"
    */
   void step() {
@@ -730,8 +708,8 @@ struct M1T380 {
   void irq_trigger() {
     clock_.schedule(INT_PERIOD, [=]() { irq_trigger(); });
     irq_ = true;
-    SPDLOG_DEBUG("{:010d} {:04x}: intdis {} iff {} iff1 {} iff2 {} im {}",
-                 cyc(), pc(), cpu_.on_is_int_disabled(), cpu_.on_get_iff(),
+    SPDLOG_DEBUG("intdis {} iff {} iff1 {} iff2 {} im {}",
+                 cpu_.on_is_int_disabled(), cpu_.on_get_iff(),
                  cpu_.on_get_iff1(), cpu_.on_get_iff2(),
                  cpu_.on_get_int_mode());
   }
@@ -756,6 +734,32 @@ struct M1T380 {
 
 /***************************************************************************
  *
+ * CUSTOM SPDLOG FLAG FORMATTER
+ *
+ ***************************************************************************/
+
+class SpdFlagSimstate : public spdlog::custom_flag_formatter {
+ public:
+  SpdFlagSimstate(M1T380& sys) : sys_(sys) {}
+
+  void format(const spdlog::details::log_msg&, const tm&,
+              spdlog::memory_buf_t& dest) override {
+    string some_txt =
+        fmt::format("t {:7.3f} cyc {:10d} pc {:04x}", sys_.clock_.sec(),
+                    sys_.clock_.cyc(), sys_.cpu_.on_get_pc());
+    dest.append(some_txt.data(), some_txt.data() + some_txt.size());
+  }
+
+  unique_ptr<custom_flag_formatter> clone() const override {
+    return spdlog::details::make_unique<SpdFlagSimstate>(sys_);
+  }
+
+ private:
+  M1T380& sys_;
+};
+
+/***************************************************************************
+ *
  * MAIN
  *
  ***************************************************************************/
@@ -772,8 +776,6 @@ inline std::string slurp(const std::string& path) {
 }
 
 int main(int argc, char** argv) {
-  spdlog::set_level(spdlog::level::info);
-
   argparse::ArgumentParser parser("m1t380emu");
 
   parser.add_argument("-v", "--verbose")
@@ -817,10 +819,13 @@ int main(int argc, char** argv) {
       .scan<'g', double>()
       .default_value(0.);
 
-  parser.add_argument("-x")
-      .help("Simulated input voltage/current")
-      .scan<'g', double>()
-      .default_value(0.);
+  parser.add_argument("-a", "--action")
+      .help(
+          "Execute scripted action at a given time. Can be given multiple "
+          "times")
+      .metavar("TIME CMD ARGS..")
+      .append()
+      .default_value<vector<string>>({});
 
   // Parse args
   try {
@@ -832,11 +837,21 @@ int main(int argc, char** argv) {
   }
 
   // Set log level
-  if (parser.get<bool>("--verbose") == true)
+  if (parser.get<bool>("-v") == true)
     spdlog::set_level(spdlog::level::level_enum(SPDLOG_ACTIVE_LEVEL));
+  else
+    spdlog::set_level(spdlog::level::info);
 
   // Set up the simulation
   M1T380 sys;
+
+  // Set custom log formatter that will print simulation time and PC value
+  {
+    auto formatter = make_unique<spdlog::pattern_formatter>();
+    formatter->add_flag<SpdFlagSimstate>('*', sys);
+    formatter->set_pattern("[%^%L%$ %*] %v");
+    spdlog::set_formatter(std::move(formatter));
+  }
 
   // Load ROM image from file
   {
@@ -874,23 +889,68 @@ int main(int argc, char** argv) {
   sys.adc_.sim_voff_ = parser.get<double>("--adc_voff");
   sys.adc_.sim_vcal_ = parser.get<double>("--adc_vcal");
   sys.adc_.sim_vref_ = parser.get<double>("--adc_vref");
-  sys.adc_.sim_in_ = parser.get<double>("-x");
 
   // Configure simulation killswitch
   bool run = true;
   sys.clock_.schedule(sys.sec2cyc(parser.get<double>("--time")), [&]() {
-    SPDLOG_INFO("{:010d}: stopping simulation", sys.cyc());
+    SPDLOG_INFO("stopping simulation");
     run = false;
   });
 
   // Configure periodic display readouts
   uint32_t disp_print_interval = sys.sec2cyc(parser.get<double>("--disp"));
   std::function<void()> disp_print = [&]() {
-    SPDLOG_DEBUG("{:010d}: periodic display printout", sys.cyc());
+    SPDLOG_DEBUG("periodic display printout");
     sys.clock_.schedule(disp_print_interval, disp_print);
     sys.display_.print();
   };
   sys.clock_.schedule(disp_print_interval, disp_print);
+
+  // Configure scripted actions
+  for (const string& action : parser.get<vector<string>>("--action")) {
+    // Tokenize string
+    regex reg("\\s+");
+    sregex_token_iterator iter(action.begin(), action.end(), reg, -1);
+    sregex_token_iterator end;
+    deque<string> toks(iter, end);
+
+    auto pop_tok = [&]() -> auto {
+      if (!toks.size()) throw runtime_error("Not enough arguments");
+      auto r = toks.front();
+      toks.pop_front();
+      return r;
+    };
+
+    try {
+      auto time = stod(pop_tok());
+      auto cyc = sys.sec2cyc(time);
+      auto cmd = pop_tok();
+      if (cmd == "ping") {
+        sys.clock_.schedule(cyc, [&sys]() { SPDLOG_INFO("ping!"); });
+      } else if (cmd == "input") {
+        auto vx = stod(pop_tok());
+        sys.clock_.schedule(cyc, [&sys, vx]() {
+          SPDLOG_INFO("setting input voltage to {}", vx);
+          sys.adc_.sim_in_ = vx;
+        });
+      } else if (cmd == "disp") {
+        sys.clock_.schedule(cyc, [&sys]() {
+          SPDLOG_INFO("scripted display printout");
+          sys.display_.print();
+        });
+      } else {
+        throw runtime_error(fmt::format("Unknown command '{}'", cmd));
+      }
+
+      if (toks.size())
+        throw runtime_error(fmt::format("Extraneous arguments given: '{}'",
+                                        fmt::join(toks, " ")));
+    } catch (const exception& e) {
+      SPDLOG_ERROR(fmt::format("Error while parsing scripted action '{}': {}",
+                               action, e.what()));
+      return 1;
+    }
+  }
 
   // Simulate
   while (run) {
@@ -900,4 +960,5 @@ int main(int argc, char** argv) {
   sys.display_.print();
 
   SPDLOG_INFO("Done.");
+  return 0;
 }
